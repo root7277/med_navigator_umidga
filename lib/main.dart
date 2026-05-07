@@ -763,29 +763,20 @@ class _AdminScreenState extends State<AdminScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final pages = [
-      const AdminPatients(),
-      const AdminDoctors(),
-      const AdminStats(),
-    ];
+    final pages = [const AdminCalls(), const AdminStats()];
     return MainShell(
       title: 'Admin panel',
       currentIndex: index,
       onTap: (i) => setState(() => index = i),
       destinations: const [
         NavigationDestination(
-          icon: Icon(Icons.groups_outlined),
-          selectedIcon: Icon(Icons.groups),
-          label: 'Bemorlar',
+          icon: Icon(Icons.support_agent_outlined),
+          selectedIcon: Icon(Icons.support_agent),
+          label: 'Chaqiruvlar',
         ),
         NavigationDestination(
-          icon: Icon(Icons.local_hospital_outlined),
-          selectedIcon: Icon(Icons.local_hospital),
-          label: 'Shifokorlar',
-        ),
-        NavigationDestination(
-          icon: Icon(Icons.bar_chart_outlined),
-          selectedIcon: Icon(Icons.bar_chart),
+          icon: Icon(Icons.insights_outlined),
+          selectedIcon: Icon(Icons.insights),
           label: 'Statistika',
         ),
       ],
@@ -794,40 +785,57 @@ class _AdminScreenState extends State<AdminScreen> {
   }
 }
 
-class AdminPatients extends StatelessWidget {
-  const AdminPatients({super.key});
+class AdminCalls extends StatelessWidget {
+  const AdminCalls({super.key});
 
   @override
   Widget build(BuildContext context) {
     final all = AppData.calls.reversed.toList();
+    final newCalls = AppData.calls
+        .where((c) => c.status == 'Yangi chaqiruv')
+        .length;
+    final activeCalls = AppData.calls
+        .where((c) => c.status == 'Qabul qilindi' || c.status == 'Yo‘lda')
+        .length;
+    final doneCalls = AppData.calls
+        .where((c) => c.status == 'Bajarilgan')
+        .length;
+
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        const SectionTitle('Bemorlar yuborgan murojaatlar'),
-        ...all.map((c) => CallCard(call: c, showDoctor: true)),
-      ],
-    );
-  }
-}
-
-class AdminDoctors extends StatelessWidget {
-  const AdminDoctors({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    final all = AppData.calls
-        .where((c) => c.doctorName != null)
-        .toList()
-        .reversed
-        .toList();
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        const SectionTitle('Shifokorlar bajargan chaqiruvlar'),
-        if (all.isEmpty)
-          const EmptyBox(text: 'Hali shifokor bajargan chaqiruv yo‘q'),
+        Row(
+          children: [
+            Expanded(
+              child: StatCard(
+                title: 'Yangi',
+                value: '$newCalls',
+                icon: Icons.notification_important_outlined,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: StatCard(
+                title: 'Jarayonda',
+                value: '$activeCalls',
+                icon: Icons.route_outlined,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: StatCard(
+                title: 'Bajarilgan',
+                value: '$doneCalls',
+                icon: Icons.verified_outlined,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 18),
+        const SectionTitle('Barcha tibbiy chaqiruvlar'),
+        if (all.isEmpty) const EmptyBox(text: 'Hali chaqiruv mavjud emas'),
         ...all.map(
-          (c) => CallCard(call: c, showCompleted: true, showDoctor: true),
+          (c) => CallCard(call: c, showDoctor: true, showCompleted: true),
         ),
       ],
     );
@@ -841,15 +849,80 @@ class AdminStats extends StatelessWidget {
   Widget build(BuildContext context) {
     final total = AppData.calls.length;
     final done = AppData.calls.where((c) => c.status == 'Bajarilgan').length;
-    final active = AppData.calls.where((c) => c.status != 'Bajarilgan').length;
+    final newCalls = AppData.calls
+        .where((c) => c.status == 'Yangi chaqiruv')
+        .length;
+    final inProgress = AppData.calls
+        .where((c) => c.status == 'Qabul qilindi' || c.status == 'Yo‘lda')
+        .length;
+    final patients = AppData.users.where((u) => u.role == 'Bemor').length;
+    final doctors = AppData.users.where((u) => u.role == 'Shifokor').length;
+    final percent = total == 0 ? 0.0 : done / total;
 
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(28),
+            gradient: const LinearGradient(
+              colors: [Color(0xFF0369A1), Color(0xFF14B8A6)],
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(.10),
+                blurRadius: 20,
+                offset: const Offset(0, 10),
+              ),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'MedNavigator analitik paneli',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 23,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                'Chaqiruvlar, foydalanuvchilar va xizmat holatini umumiy nazorat qilish',
+                style: TextStyle(color: Colors.white70),
+              ),
+              const SizedBox(height: 18),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(20),
+                child: LinearProgressIndicator(
+                  value: percent,
+                  minHeight: 12,
+                  backgroundColor: Colors.white24,
+                  color: Colors.white,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Bajarilish ko‘rsatkichi: ${(percent * 100).toStringAsFixed(0)}%',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 18),
         Row(
           children: [
             Expanded(
-              child: StatCard(title: 'Jami', value: '$total', icon: Icons.call),
+              child: StatCard(
+                title: 'Jami chaqiruv',
+                value: '$total',
+                icon: Icons.call,
+              ),
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -862,32 +935,302 @@ class AdminStats extends StatelessWidget {
             const SizedBox(width: 12),
             Expanded(
               child: StatCard(
-                title: 'Faol',
-                value: '$active',
+                title: 'Jarayonda',
+                value: '$inProgress',
                 icon: Icons.timelapse,
               ),
             ),
           ],
         ),
-        const SizedBox(height: 18),
-        const SectionTitle('Haftalik statistika'),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: StatCard(
+                title: 'Bemorlar',
+                value: '$patients',
+                icon: Icons.groups_outlined,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: StatCard(
+                title: 'Shifokorlar',
+                value: '$doctors',
+                icon: Icons.medical_services_outlined,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: StatCard(
+                title: 'Yangi',
+                value: '$newCalls',
+                icon: Icons.fiber_new_outlined,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 22),
+        const SectionTitle('Chaqiruvlar holati bo‘yicha diagramma'),
+        DonutStatusChart(done: done, active: inProgress, fresh: newCalls),
+        const SizedBox(height: 22),
+        const SectionTitle('Haftalik chaqiruvlar diagrammasi'),
         const MiniBarChart(
           values: [4, 6, 3, 7, 10, 5, 8],
           labels: ['Du', 'Se', 'Ch', 'Pa', 'Ju', 'Sh', 'Ya'],
         ),
-        const SizedBox(height: 18),
-        const SectionTitle('Oylik statistika'),
+        const SizedBox(height: 22),
+        const SectionTitle('Oylik chaqiruvlar diagrammasi'),
         const MiniBarChart(
-          values: [12, 18, 9, 22, 27, 19],
-          labels: ['Yan', 'Fev', 'Mar', 'Apr', 'May', 'Iyun'],
+          values: [12, 18, 9, 22, 27, 19, 31, 26, 21, 34, 29, 38],
+          labels: [
+            'Yan',
+            'Fev',
+            'Mar',
+            'Apr',
+            'May',
+            'Iyn',
+            'Iyl',
+            'Avg',
+            'Sen',
+            'Okt',
+            'Noy',
+            'Dek',
+          ],
         ),
-        const SizedBox(height: 18),
-        const SectionTitle('Yillik umumiy holat'),
+        const SizedBox(height: 22),
+        const SectionTitle('Yillik o‘sish statistikasi'),
         const MiniBarChart(
           values: [90, 130, 160, 210],
           labels: ['2023', '2024', '2025', '2026'],
         ),
+        const SizedBox(height: 22),
+        const SectionTitle('Xizmat sifati indikatorlari'),
+        const QualityIndicator(
+          title: 'O‘rtacha qabul qilish tezligi',
+          value: .82,
+          label: '82%',
+        ),
+        const QualityIndicator(
+          title: 'Chaqiruvni yakunlash darajasi',
+          value: .76,
+          label: '76%',
+        ),
+        const QualityIndicator(
+          title: 'Shifokorlar faolligi',
+          value: .68,
+          label: '68%',
+        ),
       ],
+    );
+  }
+}
+
+class DonutStatusChart extends StatelessWidget {
+  final int done;
+  final int active;
+  final int fresh;
+
+  const DonutStatusChart({
+    super.key,
+    required this.done,
+    required this.active,
+    required this.fresh,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final total = max(1, done + active + fresh);
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(26),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withOpacity(.06), blurRadius: 16),
+        ],
+      ),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 150,
+            height: 150,
+            child: CustomPaint(
+              painter: DonutPainter(
+                done: done / total,
+                active: active / total,
+                fresh: fresh / total,
+              ),
+              child: Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      '${done + active + fresh}',
+                      style: const TextStyle(
+                        fontSize: 28,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const Text('jami'),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 18),
+          Expanded(
+            child: Column(
+              children: [
+                ChartLegend(
+                  color: const Color(0xFF22C55E),
+                  title: 'Bajarilgan',
+                  value: '$done ta',
+                ),
+                ChartLegend(
+                  color: const Color(0xFF0284C7),
+                  title: 'Jarayonda',
+                  value: '$active ta',
+                ),
+                ChartLegend(
+                  color: const Color(0xFFF97316),
+                  title: 'Yangi',
+                  value: '$fresh ta',
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class DonutPainter extends CustomPainter {
+  final double done;
+  final double active;
+  final double fresh;
+
+  DonutPainter({required this.done, required this.active, required this.fresh});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final rect = Rect.fromCircle(center: center, radius: size.width / 2.3);
+    final paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 22
+      ..strokeCap = StrokeCap.round;
+
+    double start = -pi / 2;
+    void arc(double value, Color color) {
+      if (value <= 0) return;
+      paint.color = color;
+      final sweep = value * 2 * pi;
+      canvas.drawArc(rect, start, sweep, false, paint);
+      start += sweep;
+    }
+
+    arc(done, const Color(0xFF22C55E));
+    arc(active, const Color(0xFF0284C7));
+    arc(fresh, const Color(0xFFF97316));
+  }
+
+  @override
+  bool shouldRepaint(covariant DonutPainter oldDelegate) => true;
+}
+
+class ChartLegend extends StatelessWidget {
+  final Color color;
+  final String title;
+  final String value;
+
+  const ChartLegend({
+    super.key,
+    required this.color,
+    required this.title,
+    required this.value,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        children: [
+          Container(
+            width: 14,
+            height: 14,
+            decoration: BoxDecoration(
+              color: color,
+              borderRadius: BorderRadius.circular(5),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              title,
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+          ),
+          Text(value),
+        ],
+      ),
+    );
+  }
+}
+
+class QualityIndicator extends StatelessWidget {
+  final String title;
+  final double value;
+  final String label;
+
+  const QualityIndicator({
+    super.key,
+    required this.title,
+    required this.value,
+    required this.label,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(22),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withOpacity(.05), blurRadius: 12),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  title,
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+              ),
+              Text(
+                label,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w900,
+                  color: Color(0xFF0284C7),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(20),
+            child: LinearProgressIndicator(value: value, minHeight: 10),
+          ),
+        ],
+      ),
     );
   }
 }
