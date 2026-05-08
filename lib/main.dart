@@ -1,7 +1,18 @@
+import 'dart:async';
 import 'dart:math';
-import 'package:flutter/material.dart';
 
-void main() {
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
+
+import 'firebase_options.dart';
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   runApp(const MedNavigatorApp());
 }
 
@@ -11,272 +22,412 @@ class MedNavigatorApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      debugShowCheckedModeBanner: false,
       title: 'MedNavigator',
+      debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,
-        colorSchemeSeed: const Color(0xFF0EA5E9),
+        colorSchemeSeed: const Color(0xFF0284C7),
         scaffoldBackgroundColor: const Color(0xFFF6FAFD),
-        fontFamily: 'Roboto',
       ),
-      home: const LoginRegisterScreen(),
+      home: const AuthGate(),
     );
   }
 }
 
-class AppUser {
-  final String firstName;
-  final String lastName;
-  final String email;
-  final String password;
-  final String role;
-
-  AppUser({
-    required this.firstName,
-    required this.lastName,
-    required this.email,
-    required this.password,
-    required this.role,
-  });
-
-  String get fullName => '$firstName $lastName';
-}
-
-class MedicalCall {
-  final int id;
-  final String patientName;
-  final String patientEmail;
-  String? doctorName;
-  final DateTime createdAt;
-  DateTime? acceptedAt;
-  DateTime? completedAt;
-  String status;
-  final String address;
-  final double patientLat;
-  final double patientLng;
-  final double doctorLat;
-  final double doctorLng;
-
-  MedicalCall({
-    required this.id,
-    required this.patientName,
-    required this.patientEmail,
-    required this.createdAt,
-    required this.status,
-    required this.address,
-    required this.patientLat,
-    required this.patientLng,
-    required this.doctorLat,
-    required this.doctorLng,
-    this.doctorName,
-    this.acceptedAt,
-    this.completedAt,
-  });
-}
-
-class AppData {
+class AppConst {
   static const String adminEmail = 'admin@mednavigator.uz';
   static const String adminPassword = 'Admin12345';
-
-  static final List<AppUser> users = [
-    AppUser(
-      firstName: 'Ali',
-      lastName: 'Valiyev',
-      email: 'bemor@gmail.com',
-      password: '12345678',
-      role: 'Bemor',
-    ),
-    AppUser(
-      firstName: 'Doktor',
-      lastName: 'Karimov',
-      email: 'doctor@gmail.com',
-      password: '12345678',
-      role: 'Shifokor',
-    ),
-  ];
-
-  static final List<MedicalCall> calls = [
-    MedicalCall(
-      id: 1,
-      patientName: 'Ali Valiyev',
-      patientEmail: 'bemor@gmail.com',
-      createdAt: DateTime.now().subtract(const Duration(days: 1, hours: 2)),
-      status: 'Bajarilgan',
-      address: 'Samarqand sh., Universitet xiyoboni',
-      patientLat: 39.6542,
-      patientLng: 66.9597,
-      doctorLat: 39.6600,
-      doctorLng: 66.9700,
-      doctorName: 'Doktor Karimov',
-      acceptedAt: DateTime.now().subtract(
-        const Duration(days: 1, hours: 1, minutes: 45),
-      ),
-      completedAt: DateTime.now().subtract(
-        const Duration(days: 1, hours: 1, minutes: 10),
-      ),
-    ),
-  ];
+  static const LatLng defaultLocation = LatLng(39.6542, 66.9597);
 }
 
-String formatDateTime(DateTime date) {
+class FirebaseRefs {
+  static final FirebaseAuth auth = FirebaseAuth.instance;
+  static final FirebaseFirestore db = FirebaseFirestore.instance;
+
+  static CollectionReference<Map<String, dynamic>> get users =>
+      db.collection('users');
+
+  static CollectionReference<Map<String, dynamic>> get calls =>
+      db.collection('medical_calls');
+}
+
+void snack(BuildContext context, String text) {
+  if (!context.mounted) return;
+  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+}
+
+String authError(FirebaseAuthException e) {
+  switch (e.code) {
+    case 'invalid-email':
+      return 'Email manzil noto‘g‘ri.';
+    case 'email-already-in-use':
+      return 'Bu email oldin ro‘yxatdan o‘tgan.';
+    case 'weak-password':
+      return 'Parol juda oddiy.';
+    case 'user-not-found':
+      return 'Bu email bo‘yicha foydalanuvchi topilmadi.';
+    case 'wrong-password':
+    case 'invalid-credential':
+      return 'Login yoki parol noto‘g‘ri.';
+    default:
+      return e.message ?? 'Firebase xatoligi.';
+  }
+}
+
+String formatTime(dynamic value) {
+  if (value == null) return 'Aniqlanmoqda';
+
+  DateTime date;
+  if (value is Timestamp) {
+    date = value.toDate();
+  } else if (value is DateTime) {
+    date = value;
+  } else {
+    return 'Aniqlanmoqda';
+  }
+
   String two(int n) => n.toString().padLeft(2, '0');
-  return '${two(date.day)}.${two(date.month)}.${date.year}  ${two(date.hour)}:${two(date.minute)}';
+  return '${two(date.day)}.${two(date.month)}.${date.year} ${two(date.hour)}:${two(date.minute)}';
 }
 
-class LoginRegisterScreen extends StatefulWidget {
-  const LoginRegisterScreen({super.key});
+String statusText(String status) {
+  switch (status) {
+    case 'pending':
+      return 'Yangi chaqiruv';
+    case 'accepted':
+      return 'Qabul qilindi';
+    case 'on_the_way':
+      return 'Shifokor yo‘lda';
+    case 'completed':
+      return 'Bajarilgan';
+    default:
+      return status;
+  }
+}
+
+Color statusColor(String status) {
+  switch (status) {
+    case 'pending':
+      return Colors.orange;
+    case 'accepted':
+      return Colors.blue;
+    case 'on_the_way':
+      return Colors.indigo;
+    case 'completed':
+      return Colors.green;
+    default:
+      return Colors.grey;
+  }
+}
+
+Future<Position?> currentPosition(BuildContext context) async {
+  final enabled = await Geolocator.isLocationServiceEnabled();
+  if (!enabled) {
+    // ignore: use_build_context_synchronously
+    snack(context, 'GPS o‘chirilgan. Lokatsiyani yoqing.');
+    return null;
+  }
+
+  LocationPermission permission = await Geolocator.checkPermission();
+
+  if (permission == LocationPermission.denied) {
+    permission = await Geolocator.requestPermission();
+  }
+
+  if (permission == LocationPermission.denied ||
+      permission == LocationPermission.deniedForever) {
+    // ignore: use_build_context_synchronously
+    snack(context, 'Lokatsiya uchun ruxsat berilmadi.');
+    return null;
+  }
+
+  // ignore: deprecated_member_use
+  return Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
+}
+
+double kmBetween(LatLng a, LatLng b) {
+  return Geolocator.distanceBetween(
+        a.latitude,
+        a.longitude,
+        b.latitude,
+        b.longitude,
+      ) /
+      1000;
+}
+
+// ===================== AUTH GATE =====================
+
+class AuthGate extends StatelessWidget {
+  const AuthGate({super.key});
+
+  Future<Map<String, dynamic>?> getUserData(String uid) async {
+    final doc = await FirebaseRefs.users.doc(uid).get();
+    return doc.data();
+  }
 
   @override
-  State<LoginRegisterScreen> createState() => _LoginRegisterScreenState();
+  Widget build(BuildContext context) {
+    return StreamBuilder<User?>(
+      stream: FirebaseRefs.auth.authStateChanges(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const LoadingScreen();
+        }
+
+        if (!snapshot.hasData) {
+          return const LoginPage();
+        }
+
+        return FutureBuilder<Map<String, dynamic>?>(
+          future: getUserData(snapshot.data!.uid),
+          builder: (context, userSnapshot) {
+            if (userSnapshot.connectionState == ConnectionState.waiting) {
+              return const LoadingScreen();
+            }
+
+            final userData = userSnapshot.data;
+
+            if (userData == null) {
+              return const LoginPage();
+            }
+
+            final role = userData['role'] ?? 'Bemor';
+
+            if (role == 'Shifokor') {
+              return DoctorShell(userData: userData);
+            }
+
+            return PatientShell(userData: userData);
+          },
+        );
+      },
+    );
+  }
 }
 
-class _LoginRegisterScreenState extends State<LoginRegisterScreen> {
-  bool isLogin = true;
-  bool obscure = true;
-  String selectedRole = 'Bemor';
+class LoadingScreen extends StatelessWidget {
+  const LoadingScreen({super.key});
 
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(body: Center(child: CircularProgressIndicator()));
+  }
+}
+
+// ===================== LOGIN REGISTER =====================
+
+class LoginPage extends StatefulWidget {
+  const LoginPage({super.key});
+
+  @override
+  State<LoginPage> createState() => _LoginPageState();
+}
+
+class _LoginPageState extends State<LoginPage> {
   final firstNameCtrl = TextEditingController();
   final lastNameCtrl = TextEditingController();
   final emailCtrl = TextEditingController();
-  final passCtrl = TextEditingController();
+  final passwordCtrl = TextEditingController();
 
-  void showMsg(String text) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+  bool isLogin = true;
+  bool loading = false;
+  bool obscure = true;
+  String selectedRole = 'Bemor';
+
+  @override
+  void dispose() {
+    firstNameCtrl.dispose();
+    lastNameCtrl.dispose();
+    emailCtrl.dispose();
+    passwordCtrl.dispose();
+    super.dispose();
   }
 
-  void login() {
+  Future<void> submit() async {
+    final firstName = firstNameCtrl.text.trim();
+    final lastName = lastNameCtrl.text.trim();
     final email = emailCtrl.text.trim();
-    final pass = passCtrl.text.trim();
+    final password = passwordCtrl.text.trim();
 
-    if (email == AppData.adminEmail && pass == AppData.adminPassword) {
-      final admin = AppUser(
-        firstName: 'Admin',
-        lastName: 'MedNavigator',
-        email: AppData.adminEmail,
-        password: AppData.adminPassword,
-        role: 'Admin',
-      );
+    if (email == AppConst.adminEmail && password == AppConst.adminPassword) {
+      if (!mounted) return;
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (_) => AdminScreen(user: admin)),
+        MaterialPageRoute(builder: (_) => const AdminShell()),
       );
       return;
     }
 
-    final found = AppData.users
-        .where((u) => u.email == email && u.password == pass)
-        .toList();
-    if (found.isEmpty) {
-      showMsg('Login yoki parol noto‘g‘ri');
+    if (email.isEmpty || password.isEmpty) {
+      snack(context, 'Email va parolni kiriting.');
       return;
     }
 
-    final user = found.first;
-    if (user.role == 'Bemor') {
-      Navigator.pushReplacement(
+    if (!email.contains('@')) {
+      snack(context, 'Email noto‘g‘ri kiritildi.');
+      return;
+    }
+
+    final hasLetter = RegExp(r'[A-Za-z]').hasMatch(password);
+    final hasDigit = RegExp(r'[0-9]').hasMatch(password);
+
+    if (password.length < 8 || !hasLetter || !hasDigit) {
+      snack(
         context,
-        MaterialPageRoute(builder: (_) => PatientScreen(user: user)),
+        'Parol kamida 8 ta belgi, harf va raqamdan iborat bo‘lsin.',
       );
-    } else if (user.role == 'Shifokor') {
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => DoctorScreen(user: user)),
-      );
-    } else {
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => AdminScreen(user: user)),
-      );
+      return;
+    }
+
+    if (!isLogin && (firstName.isEmpty || lastName.isEmpty)) {
+      snack(context, 'Ism va familiyani kiriting.');
+      return;
+    }
+
+    setState(() => loading = true);
+
+    try {
+      if (isLogin) {
+        final credential = await FirebaseRefs.auth.signInWithEmailAndPassword(
+          email: email,
+          password: password,
+        );
+
+        final doc = await FirebaseRefs.users.doc(credential.user!.uid).get();
+        final userData = doc.data();
+
+        if (userData == null) {
+          await FirebaseRefs.auth.signOut();
+          if (!mounted) return;
+          snack(context, 'Foydalanuvchi ma’lumotlari bazadan topilmadi.');
+          return;
+        }
+
+        if (!mounted) return;
+
+        final role = userData['role'] ?? 'Bemor';
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (_) => role == 'Shifokor'
+                ? DoctorShell(userData: userData)
+                : PatientShell(userData: userData),
+          ),
+        );
+      } else {
+        final credential = await FirebaseRefs.auth
+            .createUserWithEmailAndPassword(email: email, password: password);
+
+        final uid = credential.user!.uid;
+        final fullName = '$firstName $lastName';
+
+        await credential.user!.updateDisplayName(fullName);
+
+        final userData = {
+          'uid': uid,
+          'firstName': firstName,
+          'lastName': lastName,
+          'fullName': fullName,
+          'email': email,
+          'role': selectedRole,
+          'createdAt': FieldValue.serverTimestamp(),
+        };
+
+        await FirebaseRefs.users.doc(uid).set(userData);
+
+        if (!mounted) return;
+
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (_) => selectedRole == 'Shifokor'
+                ? DoctorShell(userData: userData)
+                : PatientShell(userData: userData),
+          ),
+        );
+      }
+    } on FirebaseAuthException catch (e) {
+      if (!mounted) return;
+      snack(context, authError(e));
+    } catch (e) {
+      if (!mounted) return;
+      snack(context, 'Xatolik: $e');
+    } finally {
+      if (mounted) {
+        setState(() => loading = false);
+      }
     }
   }
 
-  void register() {
-    final first = firstNameCtrl.text.trim();
-    final last = lastNameCtrl.text.trim();
-    final email = emailCtrl.text.trim();
-    final pass = passCtrl.text.trim();
+  Future<void> resetPassword() async {
+    final resetCtrl = TextEditingController(text: emailCtrl.text.trim());
 
-    if (first.isEmpty || last.isEmpty || email.isEmpty || pass.isEmpty) {
-      showMsg('Barcha maydonlarni to‘ldiring');
-      return;
-    }
-    if (!email.contains('@') || !email.contains('.')) {
-      showMsg('Email manzil noto‘g‘ri');
-      return;
-    }
-    if (pass.length < 8 ||
-        !RegExp(r'[A-Za-z]').hasMatch(pass) ||
-        !RegExp(r'\d').hasMatch(pass)) {
-      showMsg('Parol kamida 8 ta belgi, harf va raqamdan iborat bo‘lsin');
-      return;
-    }
-    if (AppData.users.any((u) => u.email == email)) {
-      showMsg('Bu email oldin ro‘yxatdan o‘tgan');
-      return;
-    }
-
-    AppData.users.add(
-      AppUser(
-        firstName: first,
-        lastName: last,
-        email: email,
-        password: pass,
-        role: selectedRole,
-      ),
-    );
-
-    showMsg('Ro‘yxatdan o‘tildi. Endi kirishingiz mumkin');
-    setState(() => isLogin = true);
-  }
-
-  void forgotPassword() {
-    final resetCtrl = TextEditingController();
-    showDialog(
+    await showDialog<void>(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Parolni tiklash'),
-        content: TextField(
-          controller: resetCtrl,
-          decoration: const InputDecoration(
-            labelText: 'Email manzil',
-            prefixIcon: Icon(Icons.email_outlined),
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Parolni tiklash'),
+          content: TextField(
+            controller: resetCtrl,
+            keyboardType: TextInputType.emailAddress,
+            decoration: const InputDecoration(
+              labelText: 'Email manzil',
+              prefixIcon: Icon(Icons.email_outlined),
+              border: OutlineInputBorder(),
+            ),
           ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Bekor qilish'),
-          ),
-          FilledButton(
-            onPressed: () {
-              Navigator.pop(context);
-              showMsg(
-                'Demo rejim: tiklash kodi emailga yuborildi deb hisoblanadi',
-              );
-            },
-            child: const Text('Kod yuborish'),
-          ),
-        ],
-      ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Bekor qilish'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                final email = resetCtrl.text.trim();
+
+                if (email.isEmpty) {
+                  snack(context, 'Email kiriting.');
+                  return;
+                }
+
+                try {
+                  await FirebaseRefs.auth.sendPasswordResetEmail(email: email);
+
+                  if (!dialogContext.mounted) return;
+                  Navigator.pop(dialogContext);
+
+                  if (!mounted) return;
+                  snack(
+                    context,
+                    'Parolni tiklash havolasi emailingizga yuborildi.',
+                  );
+                } on FirebaseAuthException catch (e) {
+                  if (!mounted) return;
+                  snack(context, authError(e));
+                } catch (e) {
+                  if (!mounted) return;
+                  snack(context, 'Xatolik: $e');
+                }
+              },
+              child: const Text('Yuborish'),
+            ),
+          ],
+        );
+      },
     );
+
+    resetCtrl.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            colors: [Color(0xFF0EA5E9), Color(0xFF14B8A6)],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-        ),
+      body: GradientBg(
         child: Center(
           child: SingleChildScrollView(
             padding: const EdgeInsets.all(20),
             child: Card(
-              elevation: 18,
+              elevation: 16,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(28),
               ),
@@ -285,17 +436,13 @@ class _LoginRegisterScreenState extends State<LoginRegisterScreen> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Container(
-                      width: 82,
-                      height: 82,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFE0F2FE),
-                        borderRadius: BorderRadius.circular(24),
-                      ),
-                      child: const Icon(
+                    const CircleAvatar(
+                      radius: 42,
+                      backgroundColor: Color(0xFFE0F2FE),
+                      child: Icon(
                         Icons.local_hospital_rounded,
-                        size: 46,
                         color: Color(0xFF0284C7),
+                        size: 46,
                       ),
                     ),
                     const SizedBox(height: 12),
@@ -308,82 +455,100 @@ class _LoginRegisterScreenState extends State<LoginRegisterScreen> {
                     ),
                     const Text(
                       'Geolokatsiyaga asoslangan tibbiy chaqiruv tizimi',
+                      textAlign: TextAlign.center,
                     ),
                     const SizedBox(height: 22),
                     if (!isLogin) ...[
-                      AppTextField(
+                      AppField(
                         controller: firstNameCtrl,
                         label: 'Ism',
                         icon: Icons.person_outline,
                       ),
-                      AppTextField(
+                      AppField(
                         controller: lastNameCtrl,
                         label: 'Familiya',
                         icon: Icons.badge_outlined,
                       ),
-                    ],
-                    AppTextField(
-                      controller: emailCtrl,
-                      label: 'Login / Email',
-                      icon: Icons.email_outlined,
-                    ),
-                    TextField(
-                      controller: passCtrl,
-                      obscureText: obscure,
-                      decoration: InputDecoration(
-                        labelText: 'Parol',
-                        prefixIcon: const Icon(Icons.lock_outline),
-                        suffixIcon: IconButton(
-                          icon: Icon(
-                            obscure ? Icons.visibility_off : Icons.visibility,
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: DropdownButtonFormField<String>(
+                          initialValue: selectedRole,
+                          decoration: InputDecoration(
+                            labelText: 'Role',
+                            prefixIcon: const Icon(
+                              Icons.manage_accounts_outlined,
+                            ),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(18),
+                            ),
                           ),
-                          onPressed: () => setState(() => obscure = !obscure),
-                        ),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(18),
+                          items: const [
+                            DropdownMenuItem(
+                              value: 'Bemor',
+                              child: Text('Bemor'),
+                            ),
+                            DropdownMenuItem(
+                              value: 'Shifokor',
+                              child: Text('Shifokor'),
+                            ),
+                          ],
+                          onChanged: (value) {
+                            setState(() => selectedRole = value ?? 'Bemor');
+                          },
                         ),
                       ),
+                    ],
+                    AppField(
+                      controller: emailCtrl,
+                      label: 'Email',
+                      icon: Icons.email_outlined,
+                      keyboardType: TextInputType.emailAddress,
                     ),
-                    const SizedBox(height: 12),
-                    if (!isLogin)
-                      DropdownButtonFormField<String>(
-                        value: selectedRole,
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: TextField(
+                        controller: passwordCtrl,
+                        obscureText: obscure,
                         decoration: InputDecoration(
-                          labelText: 'Role',
-                          prefixIcon: const Icon(
-                            Icons.manage_accounts_outlined,
+                          labelText: 'Parol',
+                          prefixIcon: const Icon(Icons.lock_outline),
+                          suffixIcon: IconButton(
+                            icon: Icon(
+                              obscure ? Icons.visibility_off : Icons.visibility,
+                            ),
+                            onPressed: () {
+                              setState(() => obscure = !obscure);
+                            },
                           ),
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(18),
                           ),
                         ),
-                        items: const [
-                          DropdownMenuItem(
-                            value: 'Bemor',
-                            child: Text('Bemor'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'Shifokor',
-                            child: Text('Shifokor'),
-                          ),
-                        ],
-                        onChanged: (v) =>
-                            setState(() => selectedRole = v ?? 'Bemor'),
                       ),
-                    const SizedBox(height: 18),
+                    ),
                     SizedBox(
                       width: double.infinity,
                       height: 54,
                       child: FilledButton.icon(
-                        onPressed: isLogin ? login : register,
-                        icon: Icon(
-                          isLogin ? Icons.login : Icons.person_add_alt_1,
-                        ),
+                        onPressed: loading ? null : submit,
+                        icon: loading
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : Icon(
+                                isLogin ? Icons.login : Icons.person_add_alt_1,
+                              ),
                         label: Text(isLogin ? 'Kirish' : 'Ro‘yxatdan o‘tish'),
                       ),
                     ),
                     TextButton(
-                      onPressed: () => setState(() => isLogin = !isLogin),
+                      onPressed: () {
+                        setState(() => isLogin = !isLogin);
+                      },
                       child: Text(
                         isLogin
                             ? 'Ro‘yxatdan o‘tish'
@@ -392,14 +557,14 @@ class _LoginRegisterScreenState extends State<LoginRegisterScreen> {
                     ),
                     if (isLogin)
                       TextButton(
-                        onPressed: forgotPassword,
-                        child: const Text('Login yoki parolni unutdingizmi?'),
+                        onPressed: resetPassword,
+                        child: const Text('Parolni unutdingizmi?'),
                       ),
                     const Divider(),
                     const Text(
-                      'Demo loginlar: bemor@gmail.com / doctor@gmail.com',
+                      'Admin: admin@mednavigator.uz / Admin12345',
+                      textAlign: TextAlign.center,
                     ),
-                    const Text('Admin: admin@mednavigator.uz / Admin12345'),
                   ],
                 ),
               ),
@@ -411,56 +576,32 @@ class _LoginRegisterScreenState extends State<LoginRegisterScreen> {
   }
 }
 
-class AppTextField extends StatelessWidget {
-  final TextEditingController controller;
-  final String label;
-  final IconData icon;
+// ===================== PATIENT =====================
 
-  const AppTextField({
-    super.key,
-    required this.controller,
-    required this.label,
-    required this.icon,
-  });
+class PatientShell extends StatefulWidget {
+  final Map<String, dynamic> userData;
+
+  const PatientShell({super.key, required this.userData});
 
   @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: TextField(
-        controller: controller,
-        decoration: InputDecoration(
-          labelText: label,
-          prefixIcon: Icon(icon),
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(18)),
-        ),
-      ),
-    );
-  }
+  State<PatientShell> createState() => _PatientShellState();
 }
 
-class PatientScreen extends StatefulWidget {
-  final AppUser user;
-  const PatientScreen({super.key, required this.user});
-
-  @override
-  State<PatientScreen> createState() => _PatientScreenState();
-}
-
-class _PatientScreenState extends State<PatientScreen> {
+class _PatientShellState extends State<PatientShell> {
   int index = 0;
 
   @override
   Widget build(BuildContext context) {
     final pages = [
-      PatientHome(user: widget.user, refresh: () => setState(() {})),
-      PatientCalls(user: widget.user),
-      ProfilePage(user: widget.user),
+      PatientHome(userData: widget.userData),
+      PatientCalls(userData: widget.userData),
+      ProfilePage(userData: widget.userData),
     ];
+
     return MainShell(
       title: 'Bemor paneli',
-      currentIndex: index,
-      onTap: (i) => setState(() => index = i),
+      index: index,
+      onTap: (value) => setState(() => index = value),
       destinations: const [
         NavigationDestination(
           icon: Icon(Icons.home_outlined),
@@ -483,60 +624,172 @@ class _PatientScreenState extends State<PatientScreen> {
   }
 }
 
-class PatientHome extends StatelessWidget {
-  final AppUser user;
-  final VoidCallback refresh;
-  const PatientHome({super.key, required this.user, required this.refresh});
+class PatientHome extends StatefulWidget {
+  final Map<String, dynamic> userData;
 
-  void sendCall(BuildContext context) {
-    final id = AppData.calls.length + 1;
-    AppData.calls.add(
-      MedicalCall(
-        id: id,
-        patientName: user.fullName,
-        patientEmail: user.email,
-        createdAt: DateTime.now(),
-        status: 'Yangi chaqiruv',
-        address: 'Samarqand sh., joriy geolokatsiya',
-        patientLat: 39.6542 + Random().nextDouble() / 100,
-        patientLng: 66.9597 + Random().nextDouble() / 100,
-        doctorLat: 39.6600,
-        doctorLng: 66.9700,
-      ),
-    );
-    refresh();
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Chaqiruv shifokorlarga yuborildi')),
-    );
+  const PatientHome({super.key, required this.userData});
+
+  @override
+  State<PatientHome> createState() => _PatientHomeState();
+}
+
+class _PatientHomeState extends State<PatientHome> {
+  GoogleMapController? mapController;
+  LatLng current = AppConst.defaultLocation;
+  bool loadingLocation = true;
+  bool sending = false;
+
+  final List<Map<String, dynamic>> clinics = const [
+    {
+      'name': 'Samarqand viloyat klinik shifoxonasi',
+      'lat': 39.6570,
+      'lng': 66.9610,
+    },
+    {'name': 'Tez tibbiy yordam punkti', 'lat': 39.6500, 'lng': 66.9550},
+    {'name': 'Oilaviy poliklinika', 'lat': 39.6620, 'lng': 66.9720},
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    loadLocation();
+  }
+
+  Future<void> loadLocation() async {
+    final position = await currentPosition(context);
+
+    if (position != null) {
+      current = LatLng(position.latitude, position.longitude);
+      mapController?.animateCamera(CameraUpdate.newLatLngZoom(current, 15));
+    }
+
+    if (mounted) {
+      setState(() => loadingLocation = false);
+    }
+  }
+
+  Future<void> sendCall() async {
+    setState(() => sending = true);
+
+    try {
+      final position = await currentPosition(context);
+      final user = FirebaseRefs.auth.currentUser;
+
+      if (user == null) {
+        if (!mounted) return;
+        snack(context, 'Tizimga qayta kiring.');
+        return;
+      }
+
+      final location = position == null
+          ? current
+          : LatLng(position.latitude, position.longitude);
+
+      await FirebaseRefs.calls.add({
+        'patientId': user.uid,
+        'patientName': widget.userData['fullName'] ?? user.email ?? 'Bemor',
+        'patientEmail': user.email,
+        'patientLat': location.latitude,
+        'patientLng': location.longitude,
+        'address': 'Joriy GPS lokatsiya',
+        'status': 'pending',
+        'doctorId': null,
+        'doctorName': null,
+        'doctorLat': null,
+        'doctorLng': null,
+        'createdAt': FieldValue.serverTimestamp(),
+        'acceptedAt': null,
+        'completedAt': null,
+      });
+
+      if (!mounted) return;
+      snack(context, 'Chaqiruv shifokorlarga yuborildi.');
+    } catch (e) {
+      if (!mounted) return;
+      snack(context, 'Chaqiruv yuborishda xatolik: $e');
+    } finally {
+      if (mounted) {
+        setState(() => sending = false);
+      }
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    final markers = <Marker>{
+      Marker(
+        markerId: const MarkerId('patient_current'),
+        position: current,
+        infoWindow: const InfoWindow(title: 'Sizning joylashuvingiz'),
+        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
+      ),
+      ...clinics.map((clinic) {
+        final location = LatLng(
+          clinic['lat'] as double,
+          clinic['lng'] as double,
+        );
+
+        return Marker(
+          markerId: MarkerId(clinic['name'] as String),
+          position: location,
+          infoWindow: InfoWindow(title: clinic['name'] as String),
+          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
+        );
+      }),
+    };
+
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        const MapPreview(
-          title: 'Joriy lokatsiya va yaqin klinikalar',
-          showClinics: true,
+        MapBox(
+          child: GoogleMap(
+            initialCameraPosition: CameraPosition(target: current, zoom: 14),
+            markers: markers,
+            myLocationEnabled: true,
+            myLocationButtonEnabled: true,
+            onMapCreated: (controller) {
+              mapController = controller;
+              controller.animateCamera(CameraUpdate.newLatLngZoom(current, 14));
+            },
+          ),
         ),
         const SizedBox(height: 16),
-        const SectionTitle('Yaqin tibbiyot muassasalari'),
-        const HospitalTile(
-          name: 'Samarqand viloyat klinik shifoxonasi',
-          distance: '1.2 km',
-        ),
-        const HospitalTile(
-          name: 'Tez tibbiy yordam punkti',
-          distance: '1.8 km',
-        ),
-        const HospitalTile(name: 'Oilaviy poliklinika', distance: '2.4 km'),
+        const SectionTitle('Yaqin klinikalar'),
+        if (loadingLocation)
+          const Center(
+            child: Padding(
+              padding: EdgeInsets.all(16),
+              child: CircularProgressIndicator(),
+            ),
+          )
+        else
+          ...clinics.map((clinic) {
+            final location = LatLng(
+              clinic['lat'] as double,
+              clinic['lng'] as double,
+            );
+            final distance = kmBetween(current, location);
+
+            return HospitalTile(
+              name: clinic['name'] as String,
+              distance: '${distance.toStringAsFixed(1)} km',
+            );
+          }),
         const SizedBox(height: 16),
         SizedBox(
           height: 56,
           child: FilledButton.icon(
-            onPressed: () => sendCall(context),
-            icon: const Icon(Icons.emergency_share),
-            label: const Text('Tibbiy chaqiruv yuborish'),
+            onPressed: sending ? null : sendCall,
+            icon: sending
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.emergency_share),
+            label: Text(
+              sending ? 'Yuborilmoqda...' : 'Tibbiy chaqiruv yuborish',
+            ),
           ),
         ),
       ],
@@ -545,49 +798,186 @@ class PatientHome extends StatelessWidget {
 }
 
 class PatientCalls extends StatelessWidget {
-  final AppUser user;
-  const PatientCalls({super.key, required this.user});
+  final Map<String, dynamic> userData;
+
+  const PatientCalls({super.key, required this.userData});
 
   @override
   Widget build(BuildContext context) {
-    final myCalls = AppData.calls
-        .where((c) => c.patientEmail == user.email)
-        .toList()
-        .reversed
-        .toList();
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        const SectionTitle('Mening chaqiruvlarim'),
-        if (myCalls.isEmpty) const EmptyBox(text: 'Hali chaqiruv yuborilmagan'),
-        ...myCalls.map((c) => CallCard(call: c, showDoctor: true)),
-      ],
+    final uid = FirebaseRefs.auth.currentUser?.uid;
+
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirebaseRefs.calls.where('patientId', isEqualTo: uid).snapshots(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        final docs = snapshot.data!.docs.toList();
+        docs.sort((a, b) {
+          final at = a.data()['createdAt'];
+          final bt = b.data()['createdAt'];
+
+          if (at is Timestamp && bt is Timestamp) {
+            return bt.compareTo(at);
+          }
+
+          return 0;
+        });
+
+        return ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            const SectionTitle('Mening chaqiruvlarim'),
+            if (docs.isEmpty)
+              const EmptyBox(text: 'Hali chaqiruv yuborilmagan.'),
+            ...docs.map((doc) {
+              final data = doc.data();
+              final status = data['status'] ?? '';
+
+              return CallCard(
+                data: data,
+                showDoctor: true,
+                showCompleted: true,
+                action: status == 'accepted' || status == 'on_the_way'
+                    ? FilledButton.icon(
+                        onPressed: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) =>
+                                  PatientTrackingPage(callId: doc.id),
+                            ),
+                          );
+                        },
+                        icon: const Icon(Icons.location_searching),
+                        label: const Text('Shifokorni kuzatish'),
+                      )
+                    : null,
+              );
+            }),
+          ],
+        );
+      },
     );
   }
 }
 
-class DoctorScreen extends StatefulWidget {
-  final AppUser user;
-  const DoctorScreen({super.key, required this.user});
+class PatientTrackingPage extends StatelessWidget {
+  final String callId;
+
+  const PatientTrackingPage({super.key, required this.callId});
 
   @override
-  State<DoctorScreen> createState() => _DoctorScreenState();
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Shifokor harakatini kuzatish')),
+      body: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+        stream: FirebaseRefs.calls.doc(callId).snapshots(),
+        builder: (context, snapshot) {
+          if (!snapshot.hasData) {
+            return const Center(child: CircularProgressIndicator());
+          }
+
+          final data = snapshot.data!.data() ?? {};
+
+          final patient = LatLng(
+            (data['patientLat'] ?? AppConst.defaultLocation.latitude)
+                .toDouble(),
+            (data['patientLng'] ?? AppConst.defaultLocation.longitude)
+                .toDouble(),
+          );
+
+          final doctorLat = data['doctorLat'];
+          final doctorLng = data['doctorLng'];
+
+          final LatLng? doctor = doctorLat == null || doctorLng == null
+              ? null
+              : LatLng(doctorLat.toDouble(), doctorLng.toDouble());
+
+          final markers = <Marker>{
+            Marker(
+              markerId: const MarkerId('patient'),
+              position: patient,
+              infoWindow: const InfoWindow(title: 'Bemor'),
+              icon: BitmapDescriptor.defaultMarkerWithHue(
+                BitmapDescriptor.hueAzure,
+              ),
+            ),
+            if (doctor != null)
+              Marker(
+                markerId: const MarkerId('doctor'),
+                position: doctor,
+                infoWindow: InfoWindow(title: data['doctorName'] ?? 'Shifokor'),
+                icon: BitmapDescriptor.defaultMarkerWithHue(
+                  BitmapDescriptor.hueGreen,
+                ),
+              ),
+          };
+
+          final polylines = <Polyline>{
+            if (doctor != null)
+              Polyline(
+                polylineId: const PolylineId('doctor_patient_line'),
+                points: [doctor, patient],
+                width: 5,
+                color: Colors.blue,
+              ),
+          };
+
+          return Column(
+            children: [
+              Expanded(
+                child: GoogleMap(
+                  initialCameraPosition: CameraPosition(
+                    target: doctor ?? patient,
+                    zoom: 15,
+                  ),
+                  markers: markers,
+                  polylines: polylines,
+                ),
+              ),
+              StatusPanel(
+                title: 'Holat: ${statusText(data['status'] ?? '')}',
+                lines: [
+                  'Shifokor: ${data['doctorName'] ?? 'Hali belgilanmagan'}',
+                  'Chaqiruv vaqti: ${formatTime(data['createdAt'])}',
+                ],
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
 }
 
-class _DoctorScreenState extends State<DoctorScreen> {
+// ===================== DOCTOR =====================
+
+class DoctorShell extends StatefulWidget {
+  final Map<String, dynamic> userData;
+
+  const DoctorShell({super.key, required this.userData});
+
+  @override
+  State<DoctorShell> createState() => _DoctorShellState();
+}
+
+class _DoctorShellState extends State<DoctorShell> {
   int index = 0;
 
   @override
   Widget build(BuildContext context) {
     final pages = [
-      DoctorHome(user: widget.user, refresh: () => setState(() {})),
-      DoctorCalls(user: widget.user),
-      ProfilePage(user: widget.user),
+      DoctorHome(userData: widget.userData),
+      DoctorCalls(userData: widget.userData),
+      ProfilePage(userData: widget.userData),
     ];
+
     return MainShell(
       title: 'Shifokor paneli',
-      currentIndex: index,
-      onTap: (i) => setState(() => index = i),
+      index: index,
+      onTap: (value) => setState(() => index = value),
       destinations: const [
         NavigationDestination(
           icon: Icon(Icons.home_outlined),
@@ -611,163 +1001,350 @@ class _DoctorScreenState extends State<DoctorScreen> {
 }
 
 class DoctorHome extends StatelessWidget {
-  final AppUser user;
-  final VoidCallback refresh;
-  const DoctorHome({super.key, required this.user, required this.refresh});
+  final Map<String, dynamic> userData;
 
-  void accept(BuildContext context, MedicalCall call) {
-    call.status = 'Qabul qilindi';
-    call.doctorName = user.fullName;
-    call.acceptedAt = DateTime.now();
-    refresh();
+  const DoctorHome({super.key, required this.userData});
+
+  Future<void> acceptCall(BuildContext context, String callId) async {
+    final user = FirebaseRefs.auth.currentUser;
+
+    if (user == null) {
+      snack(context, 'Tizimga qayta kiring.');
+      return;
+    }
+
+    final position = await currentPosition(context);
+
+    await FirebaseRefs.calls.doc(callId).update({
+      'status': 'accepted',
+      'doctorId': user.uid,
+      'doctorName': userData['fullName'] ?? user.email ?? 'Shifokor',
+      'doctorLat': position?.latitude,
+      'doctorLng': position?.longitude,
+      'acceptedAt': FieldValue.serverTimestamp(),
+    });
+
+    if (!context.mounted) return;
+
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) =>
-            RouteTrackingScreen(call: call, doctor: user, refresh: refresh),
+        builder: (_) => DoctorNavigationPage(
+          callId: callId,
+          doctorName: userData['fullName'] ?? 'Shifokor',
+        ),
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final newCalls = AppData.calls
-        .where((c) => c.status == 'Yangi chaqiruv')
-        .toList()
-        .reversed
-        .toList();
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        const SectionTitle('Yangi bemor chaqiruvlari'),
-        if (newCalls.isEmpty)
-          const EmptyBox(text: 'Hozircha yangi chaqiruv yo‘q'),
-        ...newCalls.map(
-          (c) => CallCard(
-            call: c,
-            action: FilledButton.icon(
-              onPressed: () => accept(context, c),
-              icon: const Icon(Icons.check_circle_outline),
-              label: const Text('Qabul qilish'),
-            ),
-          ),
-        ),
-      ],
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirebaseRefs.calls
+          .where('status', isEqualTo: 'pending')
+          .snapshots(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        final docs = snapshot.data!.docs.toList();
+        docs.sort((a, b) {
+          final at = a.data()['createdAt'];
+          final bt = b.data()['createdAt'];
+
+          if (at is Timestamp && bt is Timestamp) {
+            return bt.compareTo(at);
+          }
+
+          return 0;
+        });
+
+        return ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            const SectionTitle('Yangi bemor chaqiruvlari'),
+            if (docs.isEmpty)
+              const EmptyBox(text: 'Hozircha yangi chaqiruv yo‘q.'),
+            ...docs.map((doc) {
+              return CallCard(
+                data: doc.data(),
+                action: FilledButton.icon(
+                  onPressed: () => acceptCall(context, doc.id),
+                  icon: const Icon(Icons.check_circle_outline),
+                  label: const Text('Qabul qilish'),
+                ),
+              );
+            }),
+          ],
+        );
+      },
     );
   }
 }
 
-class RouteTrackingScreen extends StatefulWidget {
-  final MedicalCall call;
-  final AppUser doctor;
-  final VoidCallback refresh;
-  const RouteTrackingScreen({
+class DoctorNavigationPage extends StatefulWidget {
+  final String callId;
+  final String doctorName;
+
+  const DoctorNavigationPage({
     super.key,
-    required this.call,
-    required this.doctor,
-    required this.refresh,
+    required this.callId,
+    required this.doctorName,
   });
 
   @override
-  State<RouteTrackingScreen> createState() => _RouteTrackingScreenState();
+  State<DoctorNavigationPage> createState() => _DoctorNavigationPageState();
 }
 
-class _RouteTrackingScreenState extends State<RouteTrackingScreen> {
-  bool started = false;
-  double progress = 0.12;
+class _DoctorNavigationPageState extends State<DoctorNavigationPage> {
+  StreamSubscription<Position>? subscription;
+  LatLng? doctorLocation;
+  bool tracking = false;
 
-  void startMove() {
+  @override
+  void dispose() {
+    subscription?.cancel();
+    super.dispose();
+  }
+
+  Future<void> startTracking() async {
+    final position = await currentPosition(context);
+
+    if (position == null) return;
+
     setState(() {
-      started = true;
-      progress = min(1, progress + 0.25);
-      widget.call.status = progress >= 1 ? 'Bajarilgan' : 'Yo‘lda';
-      if (progress >= 1) widget.call.completedAt = DateTime.now();
+      doctorLocation = LatLng(position.latitude, position.longitude);
+      tracking = true;
     });
-    widget.refresh();
+
+    await FirebaseRefs.calls.doc(widget.callId).update({
+      'status': 'on_the_way',
+      'doctorLat': position.latitude,
+      'doctorLng': position.longitude,
+    });
+
+    await subscription?.cancel();
+
+    subscription =
+        Geolocator.getPositionStream(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.high,
+            distanceFilter: 3,
+          ),
+        ).listen((position) async {
+          final next = LatLng(position.latitude, position.longitude);
+
+          doctorLocation = next;
+
+          await FirebaseRefs.calls.doc(widget.callId).update({
+            'status': 'on_the_way',
+            'doctorLat': next.latitude,
+            'doctorLng': next.longitude,
+          });
+
+          if (mounted) {
+            setState(() {});
+          }
+        });
+
+    if (!mounted) return;
+    snack(context, 'Jonli tracking boshlandi.');
+  }
+
+  Future<void> completeCall() async {
+    await subscription?.cancel();
+
+    await FirebaseRefs.calls.doc(widget.callId).update({
+      'status': 'completed',
+      'completedAt': FieldValue.serverTimestamp(),
+    });
+
+    if (!mounted) return;
+    snack(context, 'Chaqiruv bajarilgan deb belgilandi.');
+    Navigator.pop(context);
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Bemor manziliga yo‘nalish')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          MapPreview(
-            title: 'Shifokordan bemorgacha yo‘l',
-            progress: progress,
-            showClinics: false,
-          ),
-          const SizedBox(height: 16),
-          InfoPanel(
-            items: [
-              'Bemor: ${widget.call.patientName}',
-              'Manzil: ${widget.call.address}',
-              'Chaqiruv vaqti: ${formatDateTime(widget.call.createdAt)}',
-              'Holat: ${widget.call.status}',
-            ],
-          ),
-          const SizedBox(height: 16),
-          SizedBox(
-            height: 54,
-            child: FilledButton.icon(
-              onPressed: progress >= 1 ? null : startMove,
-              icon: Icon(progress >= 1 ? Icons.done_all : Icons.navigation),
-              label: Text(
-                progress >= 1
-                    ? 'Chaqiruv yakunlandi'
-                    : started
-                    ? 'Harakatni davom ettirish'
-                    : 'Chaqiruvni boshlash',
+      appBar: AppBar(title: const Text('Bemor manziliga yo‘l')),
+      body: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+        stream: FirebaseRefs.calls.doc(widget.callId).snapshots(),
+        builder: (context, snapshot) {
+          if (!snapshot.hasData) {
+            return const Center(child: CircularProgressIndicator());
+          }
+
+          final data = snapshot.data!.data() ?? {};
+
+          final patient = LatLng(
+            (data['patientLat'] ?? AppConst.defaultLocation.latitude)
+                .toDouble(),
+            (data['patientLng'] ?? AppConst.defaultLocation.longitude)
+                .toDouble(),
+          );
+
+          final mapDoctor =
+              doctorLocation ??
+              ((data['doctorLat'] != null && data['doctorLng'] != null)
+                  ? LatLng(
+                      data['doctorLat'].toDouble(),
+                      data['doctorLng'].toDouble(),
+                    )
+                  : patient);
+
+          return Column(
+            children: [
+              Expanded(
+                child: GoogleMap(
+                  initialCameraPosition: CameraPosition(
+                    target: mapDoctor,
+                    zoom: 15,
+                  ),
+                  myLocationEnabled: true,
+                  markers: {
+                    Marker(
+                      markerId: const MarkerId('patient'),
+                      position: patient,
+                      infoWindow: InfoWindow(
+                        title: data['patientName'] ?? 'Bemor',
+                      ),
+                      icon: BitmapDescriptor.defaultMarkerWithHue(
+                        BitmapDescriptor.hueAzure,
+                      ),
+                    ),
+                    Marker(
+                      markerId: const MarkerId('doctor'),
+                      position: mapDoctor,
+                      infoWindow: InfoWindow(title: widget.doctorName),
+                      icon: BitmapDescriptor.defaultMarkerWithHue(
+                        BitmapDescriptor.hueGreen,
+                      ),
+                    ),
+                  },
+                  polylines: {
+                    Polyline(
+                      polylineId: const PolylineId('route'),
+                      points: [mapDoctor, patient],
+                      color: Colors.blue,
+                      width: 5,
+                    ),
+                  },
+                ),
               ),
-            ),
-          ),
-        ],
+              Container(
+                width: double.infinity,
+                color: Colors.white,
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      'Bemor: ${data['patientName'] ?? ''}',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w900,
+                        fontSize: 18,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text('Holat: ${statusText(data['status'] ?? '')}'),
+                    const SizedBox(height: 12),
+                    FilledButton.icon(
+                      onPressed: tracking ? null : startTracking,
+                      icon: const Icon(Icons.navigation),
+                      label: Text(
+                        tracking
+                            ? 'Jonli tracking ishlayapti'
+                            : 'Chaqiruvni boshlash',
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    OutlinedButton.icon(
+                      onPressed: completeCall,
+                      icon: const Icon(Icons.done_all),
+                      label: const Text('Chaqiruvni tugatish'),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
 }
 
 class DoctorCalls extends StatelessWidget {
-  final AppUser user;
-  const DoctorCalls({super.key, required this.user});
+  final Map<String, dynamic> userData;
+
+  const DoctorCalls({super.key, required this.userData});
 
   @override
   Widget build(BuildContext context) {
-    final done = AppData.calls
-        .where((c) => c.doctorName == user.fullName)
-        .toList()
-        .reversed
-        .toList();
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        const SectionTitle('Men bajargan chaqiruvlar'),
-        if (done.isEmpty) const EmptyBox(text: 'Hali bajarilgan chaqiruv yo‘q'),
-        ...done.map((c) => CallCard(call: c, showCompleted: true)),
-      ],
+    final uid = FirebaseRefs.auth.currentUser?.uid;
+
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirebaseRefs.calls.where('doctorId', isEqualTo: uid).snapshots(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        final docs = snapshot.data!.docs.toList();
+        docs.sort((a, b) {
+          final at = a.data()['createdAt'];
+          final bt = b.data()['createdAt'];
+
+          if (at is Timestamp && bt is Timestamp) {
+            return bt.compareTo(at);
+          }
+
+          return 0;
+        });
+
+        return ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            const SectionTitle('Men qabul qilgan chaqiruvlar'),
+            if (docs.isEmpty)
+              const EmptyBox(text: 'Hali chaqiruv qabul qilinmagan.'),
+            ...docs.map((doc) {
+              return CallCard(
+                data: doc.data(),
+                showDoctor: true,
+                showCompleted: true,
+              );
+            }),
+          ],
+        );
+      },
     );
   }
 }
 
-class AdminScreen extends StatefulWidget {
-  final AppUser user;
-  const AdminScreen({super.key, required this.user});
+// ===================== ADMIN =====================
+
+class AdminShell extends StatefulWidget {
+  const AdminShell({super.key});
 
   @override
-  State<AdminScreen> createState() => _AdminScreenState();
+  State<AdminShell> createState() => _AdminShellState();
 }
 
-class _AdminScreenState extends State<AdminScreen> {
+class _AdminShellState extends State<AdminShell> {
   int index = 0;
 
   @override
   Widget build(BuildContext context) {
-    final pages = [const AdminCalls(), const AdminStats()];
+    final pages = const [AdminCallsPage(), AdminStatsPage()];
+
     return MainShell(
       title: 'Admin panel',
-      currentIndex: index,
-      onTap: (i) => setState(() => index = i),
+      index: index,
+      isAdmin: true,
+      onTap: (value) => setState(() => index = value),
       destinations: const [
         NavigationDestination(
           icon: Icon(Icons.support_agent_outlined),
@@ -785,243 +1362,701 @@ class _AdminScreenState extends State<AdminScreen> {
   }
 }
 
-class AdminCalls extends StatelessWidget {
-  const AdminCalls({super.key});
+class AdminCallsPage extends StatelessWidget {
+  const AdminCallsPage({super.key});
 
   @override
   Widget build(BuildContext context) {
-    final all = AppData.calls.reversed.toList();
-    final newCalls = AppData.calls
-        .where((c) => c.status == 'Yangi chaqiruv')
-        .length;
-    final activeCalls = AppData.calls
-        .where((c) => c.status == 'Qabul qilindi' || c.status == 'Yo‘lda')
-        .length;
-    final doneCalls = AppData.calls
-        .where((c) => c.status == 'Bajarilgan')
-        .length;
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirebaseRefs.calls.snapshots(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        final docs = snapshot.data!.docs.toList();
+        docs.sort((a, b) {
+          final at = a.data()['createdAt'];
+          final bt = b.data()['createdAt'];
+
+          if (at is Timestamp && bt is Timestamp) {
+            return bt.compareTo(at);
+          }
+
+          return 0;
+        });
+
+        final pending = docs
+            .where((doc) => doc.data()['status'] == 'pending')
+            .length;
+        final active = docs.where((doc) {
+          final status = doc.data()['status'];
+          return status == 'accepted' || status == 'on_the_way';
+        }).length;
+        final completed = docs
+            .where((doc) => doc.data()['status'] == 'completed')
+            .length;
+
+        return ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: StatCard(
+                    title: 'Yangi',
+                    value: '$pending',
+                    icon: Icons.fiber_new,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: StatCard(
+                    title: 'Jarayonda',
+                    value: '$active',
+                    icon: Icons.route,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: StatCard(
+                    title: 'Bajarilgan',
+                    value: '$completed',
+                    icon: Icons.done_all,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 18),
+            const SectionTitle('Barcha tibbiy chaqiruvlar'),
+            if (docs.isEmpty) const EmptyBox(text: 'Chaqiruv mavjud emas.'),
+            ...docs.map((doc) {
+              return CallCard(
+                data: doc.data(),
+                showDoctor: true,
+                showCompleted: true,
+              );
+            }),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class AdminStatsPage extends StatelessWidget {
+  const AdminStatsPage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirebaseRefs.calls.snapshots(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        final docs = snapshot.data!.docs;
+        final total = docs.length;
+        final pending = docs
+            .where((doc) => doc.data()['status'] == 'pending')
+            .length;
+        final active = docs.where((doc) {
+          final status = doc.data()['status'];
+          return status == 'accepted' || status == 'on_the_way';
+        }).length;
+        final completed = docs
+            .where((doc) => doc.data()['status'] == 'completed')
+            .length;
+        final percent = total == 0 ? 0.0 : completed / total;
+
+        return ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(28),
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF0369A1), Color(0xFF14B8A6)],
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'MedNavigator analitik paneli',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 23,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Real-time chaqiruvlar statistikasi',
+                    style: TextStyle(color: Colors.white70),
+                  ),
+                  const SizedBox(height: 16),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(20),
+                    child: LinearProgressIndicator(
+                      value: percent,
+                      minHeight: 12,
+                      backgroundColor: Colors.white24,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Bajarilish ko‘rsatkichi: ${(percent * 100).toStringAsFixed(0)}%',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 18),
+            Row(
+              children: [
+                Expanded(
+                  child: StatCard(
+                    title: 'Jami',
+                    value: '$total',
+                    icon: Icons.call,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: StatCard(
+                    title: 'Yangi',
+                    value: '$pending',
+                    icon: Icons.fiber_new,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: StatCard(
+                    title: 'Bajarilgan',
+                    value: '$completed',
+                    icon: Icons.done_all,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 22),
+            const SectionTitle('Holatlar bo‘yicha diagramma'),
+            DonutStatusChart(done: completed, active: active, fresh: pending),
+            const SizedBox(height: 22),
+            const SectionTitle('Haftalik diagramma'),
+            const MiniBarChart(
+              values: [4, 6, 3, 7, 10, 5, 8],
+              labels: ['Du', 'Se', 'Ch', 'Pa', 'Ju', 'Sh', 'Ya'],
+            ),
+            const SizedBox(height: 22),
+            const SectionTitle('Oylik diagramma'),
+            const MiniBarChart(
+              values: [12, 18, 9, 22, 27, 19, 31, 26, 21, 34, 29, 38],
+              labels: [
+                'Yan',
+                'Fev',
+                'Mar',
+                'Apr',
+                'May',
+                'Iyn',
+                'Iyl',
+                'Avg',
+                'Sen',
+                'Okt',
+                'Noy',
+                'Dek',
+              ],
+            ),
+            const SizedBox(height: 22),
+            const SectionTitle('Xizmat sifati indikatorlari'),
+            QualityIndicator(
+              title: 'Qabul qilish tezligi',
+              value: total == 0 ? 0 : min(1, active / total + .2),
+              label:
+                  '${((total == 0 ? 0 : min(1, active / total + .2)) * 100).toStringAsFixed(0)}%',
+            ),
+            QualityIndicator(
+              title: 'Yakunlangan chaqiruvlar',
+              value: percent,
+              label: '${(percent * 100).toStringAsFixed(0)}%',
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+// ===================== COMMON UI =====================
+
+class MainShell extends StatelessWidget {
+  final String title;
+  final Widget child;
+  final int index;
+  final bool isAdmin;
+  final ValueChanged<int> onTap;
+  final List<NavigationDestination> destinations;
+
+  const MainShell({
+    super.key,
+    required this.title,
+    required this.child,
+    required this.index,
+    required this.onTap,
+    required this.destinations,
+    this.isAdmin = false,
+  });
+
+  Future<void> logout(BuildContext context) async {
+    if (!isAdmin) {
+      await FirebaseRefs.auth.signOut();
+    }
+
+    if (!context.mounted) return;
+
+    Navigator.pushAndRemoveUntil(
+      context,
+      MaterialPageRoute(builder: (_) => const LoginPage()),
+      (_) => false,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(title, style: const TextStyle(fontWeight: FontWeight.w900)),
+        actions: [
+          IconButton(
+            onPressed: () => logout(context),
+            icon: const Icon(Icons.logout),
+          ),
+        ],
+      ),
+      body: child,
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: index,
+        onDestinationSelected: onTap,
+        destinations: destinations,
+      ),
+    );
+  }
+}
+
+class GradientBg extends StatelessWidget {
+  final Widget child;
+
+  const GradientBg({super.key, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          colors: [Color(0xFF0284C7), Color(0xFF14B8A6)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+      ),
+      child: child,
+    );
+  }
+}
+
+class AppField extends StatelessWidget {
+  final TextEditingController controller;
+  final String label;
+  final IconData icon;
+  final TextInputType? keyboardType;
+
+  const AppField({
+    super.key,
+    required this.controller,
+    required this.label,
+    required this.icon,
+    this.keyboardType,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: TextField(
+        controller: controller,
+        keyboardType: keyboardType,
+        decoration: InputDecoration(
+          labelText: label,
+          prefixIcon: Icon(icon),
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(18)),
+        ),
+      ),
+    );
+  }
+}
+
+class MapBox extends StatelessWidget {
+  final Widget child;
+
+  const MapBox({super.key, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 330,
+      child: ClipRRect(borderRadius: BorderRadius.circular(26), child: child),
+    );
+  }
+}
+
+class SectionTitle extends StatelessWidget {
+  final String text;
+
+  const SectionTitle(this.text, {super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Text(
+        text,
+        style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
+      ),
+    );
+  }
+}
+
+class EmptyBox extends StatelessWidget {
+  final String text;
+
+  const EmptyBox({super.key, required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(22),
+      ),
+      child: Center(child: Text(text)),
+    );
+  }
+}
+
+class HospitalTile extends StatelessWidget {
+  final String name;
+  final String distance;
+
+  const HospitalTile({super.key, required this.name, required this.distance});
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: ListTile(
+        leading: const CircleAvatar(child: Icon(Icons.local_hospital)),
+        title: Text(name, style: const TextStyle(fontWeight: FontWeight.w700)),
+        subtitle: Text('Masofa: $distance'),
+      ),
+    );
+  }
+}
+
+class CallCard extends StatelessWidget {
+  final Map<String, dynamic> data;
+  final Widget? action;
+  final bool showDoctor;
+  final bool showCompleted;
+
+  const CallCard({
+    super.key,
+    required this.data,
+    this.action,
+    this.showDoctor = false,
+    this.showCompleted = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final status = data['status'] ?? '';
+    final color = statusColor(status);
+
+    return Card(
+      elevation: 3,
+      margin: const EdgeInsets.only(bottom: 12),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                CircleAvatar(
+                  // ignore: deprecated_member_use
+                  backgroundColor: color.withOpacity(.15),
+                  child: Icon(Icons.emergency, color: color),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    data['patientName'] ?? 'Bemor',
+                    style: const TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+                Chip(
+                  label: Text(statusText(status)),
+                  // ignore: deprecated_member_use
+                  backgroundColor: color.withOpacity(.14),
+                  side: BorderSide.none,
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Text('Manzil: ${data['address'] ?? 'GPS lokatsiya'}'),
+            Text('Chaqiruv sanasi: ${formatTime(data['createdAt'])}'),
+            if (showDoctor)
+              Text('Shifokor: ${data['doctorName'] ?? 'Hali belgilanmagan'}'),
+            if (showCompleted)
+              Text('Tugatilgan vaqt: ${formatTime(data['completedAt'])}'),
+            if (action != null) ...[
+              const SizedBox(height: 12),
+              SizedBox(width: double.infinity, child: action!),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class StatusPanel extends StatelessWidget {
+  final String title;
+  final List<String> lines;
+
+  const StatusPanel({super.key, required this.title, required this.lines});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      color: Colors.white,
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18),
+          ),
+          const SizedBox(height: 6),
+          ...lines.map((line) => Text(line)),
+        ],
+      ),
+    );
+  }
+}
+
+class ProfilePage extends StatelessWidget {
+  final Map<String, dynamic> userData;
+
+  const ProfilePage({super.key, required this.userData});
+
+  @override
+  Widget build(BuildContext context) {
+    final user = FirebaseRefs.auth.currentUser;
+    final fullName =
+        userData['fullName'] ?? user?.displayName ?? 'Foydalanuvchi';
+    final email = userData['email'] ?? user?.email ?? '';
+    final role = userData['role'] ?? 'Bemor';
 
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        Row(
-          children: [
-            Expanded(
-              child: StatCard(
-                title: 'Yangi',
-                value: '$newCalls',
-                icon: Icons.notification_important_outlined,
-              ),
+        Container(
+          padding: const EdgeInsets.all(22),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(28),
+            gradient: const LinearGradient(
+              colors: [Color(0xFF0EA5E9), Color(0xFF14B8A6)],
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: StatCard(
-                title: 'Jarayonda',
-                value: '$activeCalls',
-                icon: Icons.route_outlined,
+          ),
+          child: Column(
+            children: [
+              CircleAvatar(
+                radius: 54,
+                backgroundColor: Colors.white,
+                child: Text(
+                  fullName.toString().isNotEmpty
+                      ? fullName.toString()[0].toUpperCase()
+                      : '?',
+                  style: const TextStyle(
+                    fontSize: 44,
+                    fontWeight: FontWeight.w900,
+                    color: Color(0xFF0284C7),
+                  ),
+                ),
               ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: StatCard(
-                title: 'Bajarilgan',
-                value: '$doneCalls',
-                icon: Icons.verified_outlined,
+              const SizedBox(height: 14),
+              Text(
+                fullName,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 24,
+                  fontWeight: FontWeight.w900,
+                ),
               ),
-            ),
-          ],
+              Text(role, style: const TextStyle(color: Colors.white70)),
+            ],
+          ),
         ),
-        const SizedBox(height: 18),
-        const SectionTitle('Barcha tibbiy chaqiruvlar'),
-        if (all.isEmpty) const EmptyBox(text: 'Hali chaqiruv mavjud emas'),
-        ...all.map(
-          (c) => CallCard(call: c, showDoctor: true, showCompleted: true),
+        const SizedBox(height: 16),
+        ProfileTile(icon: Icons.email_outlined, title: 'Email', value: email),
+        ProfileTile(icon: Icons.badge_outlined, title: 'Rol', value: role),
+        const ProfileTile(
+          icon: Icons.verified_user_outlined,
+          title: 'Status',
+          value: 'Faol foydalanuvchi',
         ),
       ],
     );
   }
 }
 
-class AdminStats extends StatelessWidget {
-  const AdminStats({super.key});
+class ProfileTile extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String value;
+
+  const ProfileTile({
+    super.key,
+    required this.icon,
+    required this.title,
+    required this.value,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final total = AppData.calls.length;
-    final done = AppData.calls.where((c) => c.status == 'Bajarilgan').length;
-    final newCalls = AppData.calls
-        .where((c) => c.status == 'Yangi chaqiruv')
-        .length;
-    final inProgress = AppData.calls
-        .where((c) => c.status == 'Qabul qilindi' || c.status == 'Yo‘lda')
-        .length;
-    final patients = AppData.users.where((u) => u.role == 'Bemor').length;
-    final doctors = AppData.users.where((u) => u.role == 'Shifokor').length;
-    final percent = total == 0 ? 0.0 : done / total;
+    return Card(
+      child: ListTile(
+        leading: Icon(icon),
+        title: Text(title),
+        subtitle: Text(
+          value,
+          style: const TextStyle(fontWeight: FontWeight.w700),
+        ),
+      ),
+    );
+  }
+}
 
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        Container(
-          padding: const EdgeInsets.all(20),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(28),
-            gradient: const LinearGradient(
-              colors: [Color(0xFF0369A1), Color(0xFF14B8A6)],
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(.10),
-                blurRadius: 20,
-                offset: const Offset(0, 10),
-              ),
-            ],
+class StatCard extends StatelessWidget {
+  final String title;
+  final String value;
+  final IconData icon;
+
+  const StatCard({
+    super.key,
+    required this.title,
+    required this.value,
+    required this.icon,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(22),
+        boxShadow: [
+          // ignore: deprecated_member_use
+          BoxShadow(color: Colors.black.withOpacity(.06), blurRadius: 14),
+        ],
+      ),
+      child: Column(
+        children: [
+          Icon(icon, color: const Color(0xFF0284C7)),
+          const SizedBox(height: 8),
+          Text(
+            value,
+            style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900),
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'MedNavigator analitik paneli',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 23,
-                  fontWeight: FontWeight.w900,
+          Text(title, textAlign: TextAlign.center),
+        ],
+      ),
+    );
+  }
+}
+
+class MiniBarChart extends StatelessWidget {
+  final List<int> values;
+  final List<String> labels;
+
+  const MiniBarChart({super.key, required this.values, required this.labels});
+
+  @override
+  Widget build(BuildContext context) {
+    final maxValue = values.reduce(max).toDouble();
+
+    return Container(
+      height: 240,
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          // ignore: deprecated_member_use
+          BoxShadow(color: Colors.black.withOpacity(.06), blurRadius: 14),
+        ],
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: List.generate(values.length, (i) {
+          final h = (values[i] / maxValue) * 150;
+
+          return Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                Text(
+                  '${values[i]}',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 11,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 6),
-              const Text(
-                'Chaqiruvlar, foydalanuvchilar va xizmat holatini umumiy nazorat qilish',
-                style: TextStyle(color: Colors.white70),
-              ),
-              const SizedBox(height: 18),
-              ClipRRect(
-                borderRadius: BorderRadius.circular(20),
-                child: LinearProgressIndicator(
-                  value: percent,
-                  minHeight: 12,
-                  backgroundColor: Colors.white24,
-                  color: Colors.white,
+                const SizedBox(height: 6),
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 500),
+                  height: h,
+                  width: 24,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(12),
+                    gradient: const LinearGradient(
+                      colors: [Color(0xFF0284C7), Color(0xFF14B8A6)],
+                      begin: Alignment.bottomCenter,
+                      end: Alignment.topCenter,
+                    ),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Bajarilish ko‘rsatkichi: ${(percent * 100).toStringAsFixed(0)}%',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 18),
-        Row(
-          children: [
-            Expanded(
-              child: StatCard(
-                title: 'Jami chaqiruv',
-                value: '$total',
-                icon: Icons.call,
-              ),
+                const SizedBox(height: 8),
+                Text(labels[i], style: const TextStyle(fontSize: 11)),
+              ],
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: StatCard(
-                title: 'Bajarilgan',
-                value: '$done',
-                icon: Icons.done_all,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: StatCard(
-                title: 'Jarayonda',
-                value: '$inProgress',
-                icon: Icons.timelapse,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        Row(
-          children: [
-            Expanded(
-              child: StatCard(
-                title: 'Bemorlar',
-                value: '$patients',
-                icon: Icons.groups_outlined,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: StatCard(
-                title: 'Shifokorlar',
-                value: '$doctors',
-                icon: Icons.medical_services_outlined,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: StatCard(
-                title: 'Yangi',
-                value: '$newCalls',
-                icon: Icons.fiber_new_outlined,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 22),
-        const SectionTitle('Chaqiruvlar holati bo‘yicha diagramma'),
-        DonutStatusChart(done: done, active: inProgress, fresh: newCalls),
-        const SizedBox(height: 22),
-        const SectionTitle('Haftalik chaqiruvlar diagrammasi'),
-        const MiniBarChart(
-          values: [4, 6, 3, 7, 10, 5, 8],
-          labels: ['Du', 'Se', 'Ch', 'Pa', 'Ju', 'Sh', 'Ya'],
-        ),
-        const SizedBox(height: 22),
-        const SectionTitle('Oylik chaqiruvlar diagrammasi'),
-        const MiniBarChart(
-          values: [12, 18, 9, 22, 27, 19, 31, 26, 21, 34, 29, 38],
-          labels: [
-            'Yan',
-            'Fev',
-            'Mar',
-            'Apr',
-            'May',
-            'Iyn',
-            'Iyl',
-            'Avg',
-            'Sen',
-            'Okt',
-            'Noy',
-            'Dek',
-          ],
-        ),
-        const SizedBox(height: 22),
-        const SectionTitle('Yillik o‘sish statistikasi'),
-        const MiniBarChart(
-          values: [90, 130, 160, 210],
-          labels: ['2023', '2024', '2025', '2026'],
-        ),
-        const SizedBox(height: 22),
-        const SectionTitle('Xizmat sifati indikatorlari'),
-        const QualityIndicator(
-          title: 'O‘rtacha qabul qilish tezligi',
-          value: .82,
-          label: '82%',
-        ),
-        const QualityIndicator(
-          title: 'Chaqiruvni yakunlash darajasi',
-          value: .76,
-          label: '76%',
-        ),
-        const QualityIndicator(
-          title: 'Shifokorlar faolligi',
-          value: .68,
-          label: '68%',
-        ),
-      ],
+          );
+        }),
+      ),
     );
   }
 }
@@ -1041,12 +2076,14 @@ class DonutStatusChart extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final total = max(1, done + active + fresh);
+
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(26),
         boxShadow: [
+          // ignore: deprecated_member_use
           BoxShadow(color: Colors.black.withOpacity(.06), blurRadius: 16),
         ],
       ),
@@ -1117,13 +2154,15 @@ class DonutPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final center = Offset(size.width / 2, size.height / 2);
     final rect = Rect.fromCircle(center: center, radius: size.width / 2.3);
+
     final paint = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 22
       ..strokeCap = StrokeCap.round;
 
     double start = -pi / 2;
-    void arc(double value, Color color) {
+
+    void drawPart(double value, Color color) {
       if (value <= 0) return;
       paint.color = color;
       final sweep = value * 2 * pi;
@@ -1131,13 +2170,17 @@ class DonutPainter extends CustomPainter {
       start += sweep;
     }
 
-    arc(done, const Color(0xFF22C55E));
-    arc(active, const Color(0xFF0284C7));
-    arc(fresh, const Color(0xFFF97316));
+    drawPart(done, const Color(0xFF22C55E));
+    drawPart(active, const Color(0xFF0284C7));
+    drawPart(fresh, const Color(0xFFF97316));
   }
 
   @override
-  bool shouldRepaint(covariant DonutPainter oldDelegate) => true;
+  bool shouldRepaint(covariant DonutPainter oldDelegate) {
+    return oldDelegate.done != done ||
+        oldDelegate.active != active ||
+        oldDelegate.fresh != fresh;
+  }
 }
 
 class ChartLegend extends StatelessWidget {
@@ -1194,6 +2237,8 @@ class QualityIndicator extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final safeValue = value.clamp(0.0, 1.0);
+
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(16),
@@ -1201,6 +2246,7 @@ class QualityIndicator extends StatelessWidget {
         color: Colors.white,
         borderRadius: BorderRadius.circular(22),
         boxShadow: [
+          // ignore: deprecated_member_use
           BoxShadow(color: Colors.black.withOpacity(.05), blurRadius: 12),
         ],
       ),
@@ -1227,536 +2273,9 @@ class QualityIndicator extends StatelessWidget {
           const SizedBox(height: 10),
           ClipRRect(
             borderRadius: BorderRadius.circular(20),
-            child: LinearProgressIndicator(value: value, minHeight: 10),
+            child: LinearProgressIndicator(value: safeValue, minHeight: 10),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class MainShell extends StatelessWidget {
-  final String title;
-  final Widget child;
-  final int currentIndex;
-  final ValueChanged<int> onTap;
-  final List<NavigationDestination> destinations;
-
-  const MainShell({
-    super.key,
-    required this.title,
-    required this.child,
-    required this.currentIndex,
-    required this.onTap,
-    required this.destinations,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(title, style: const TextStyle(fontWeight: FontWeight.w800)),
-        actions: [
-          IconButton(
-            tooltip: 'Chiqish',
-            onPressed: () => Navigator.pushReplacement(
-              context,
-              MaterialPageRoute(builder: (_) => const LoginRegisterScreen()),
-            ),
-            icon: const Icon(Icons.logout),
-          ),
-        ],
-      ),
-      body: child,
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: currentIndex,
-        onDestinationSelected: onTap,
-        destinations: destinations,
-      ),
-    );
-  }
-}
-
-class MapPreview extends StatelessWidget {
-  final String title;
-  final bool showClinics;
-  final double progress;
-  const MapPreview({
-    super.key,
-    required this.title,
-    this.showClinics = false,
-    this.progress = 0.15,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: 280,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(26),
-        gradient: const LinearGradient(
-          colors: [Color(0xFFDFF6FF), Color(0xFFE6FFFA)],
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(.08),
-            blurRadius: 20,
-            offset: const Offset(0, 10),
-          ),
-        ],
-      ),
-      child: Stack(
-        children: [
-          Positioned(
-            top: 18,
-            left: 18,
-            child: Text(
-              title,
-              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
-            ),
-          ),
-          Positioned.fill(
-            top: 52,
-            child: CustomPaint(
-              painter: MapPainter(progress: progress, showClinics: showClinics),
-            ),
-          ),
-          Positioned(
-            bottom: 16,
-            left: 16,
-            right: 16,
-            child: Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(.9),
-                borderRadius: BorderRadius.circular(18),
-              ),
-              child: const Row(
-                children: [
-                  Icon(Icons.my_location, color: Colors.blue),
-                  SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Demo xarita: real GPS va Google Maps keyingi bosqichda ulanadi',
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class MapPainter extends CustomPainter {
-  final double progress;
-  final bool showClinics;
-  MapPainter({required this.progress, required this.showClinics});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final roadPaint = Paint()
-      ..color = const Color(0xFF94A3B8)
-      ..strokeWidth = 8
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round;
-
-    final routePaint = Paint()
-      ..color = const Color(0xFF0284C7)
-      ..strokeWidth = 8
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round;
-
-    final path = Path()
-      ..moveTo(35, size.height - 55)
-      ..cubicTo(
-        size.width * .25,
-        size.height * .55,
-        size.width * .35,
-        55,
-        size.width - 55,
-        45,
-      );
-    canvas.drawPath(path, roadPaint);
-
-    final metric = path.computeMetrics().first;
-    final subPath = metric.extractPath(0, metric.length * progress.clamp(0, 1));
-    canvas.drawPath(subPath, routePaint);
-
-    void circle(Offset o, Color color, IconData icon) {
-      final p = Paint()..color = color;
-      canvas.drawCircle(o, 18, p);
-    }
-
-    circle(Offset(35, size.height - 55), const Color(0xFF22C55E), Icons.person);
-    circle(
-      Offset(size.width - 55, 45),
-      const Color(0xFFEF4444),
-      Icons.local_hospital,
-    );
-
-    final current =
-        metric
-            .getTangentForOffset(metric.length * progress.clamp(0, 1))
-            ?.position ??
-        Offset.zero;
-    circle(current, const Color(0xFF2563EB), Icons.directions_car);
-
-    if (showClinics) {
-      for (final o in [
-        Offset(size.width * .25, 60),
-        Offset(size.width * .72, size.height * .72),
-        Offset(size.width * .5, size.height * .45),
-      ]) {
-        circle(o, const Color(0xFFEF4444), Icons.local_hospital);
-      }
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant MapPainter oldDelegate) =>
-      oldDelegate.progress != progress;
-}
-
-class HospitalTile extends StatelessWidget {
-  final String name;
-  final String distance;
-  const HospitalTile({super.key, required this.name, required this.distance});
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: ListTile(
-        leading: const CircleAvatar(child: Icon(Icons.local_hospital)),
-        title: Text(name, style: const TextStyle(fontWeight: FontWeight.w700)),
-        subtitle: Text('Masofa: $distance'),
-        trailing: const Icon(Icons.chevron_right),
-      ),
-    );
-  }
-}
-
-class CallCard extends StatelessWidget {
-  final MedicalCall call;
-  final Widget? action;
-  final bool showDoctor;
-  final bool showCompleted;
-
-  const CallCard({
-    super.key,
-    required this.call,
-    this.action,
-    this.showDoctor = false,
-    this.showCompleted = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    Color color = call.status == 'Bajarilgan'
-        ? Colors.green
-        : call.status == 'Yangi chaqiruv'
-        ? Colors.orange
-        : Colors.blue;
-
-    return Card(
-      elevation: 3,
-      margin: const EdgeInsets.only(bottom: 12),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                CircleAvatar(
-                  backgroundColor: color.withOpacity(.15),
-                  child: Icon(Icons.emergency, color: color),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    call.patientName,
-                    style: const TextStyle(
-                      fontSize: 17,
-                      fontWeight: FontWeight.w900,
-                    ),
-                  ),
-                ),
-                Chip(
-                  label: Text(call.status),
-                  side: BorderSide.none,
-                  backgroundColor: color.withOpacity(.15),
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Text('Manzil: ${call.address}'),
-            Text('Chaqiruv sanasi: ${formatDateTime(call.createdAt)}'),
-            if (showDoctor && call.doctorName != null)
-              Text('Shifokor: ${call.doctorName}'),
-            if (showCompleted && call.completedAt != null)
-              Text('Tugatilgan vaqt: ${formatDateTime(call.completedAt!)}'),
-            if (action != null) ...[
-              const SizedBox(height: 12),
-              SizedBox(width: double.infinity, child: action!),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class ProfilePage extends StatelessWidget {
-  final AppUser user;
-  const ProfilePage({super.key, required this.user});
-
-  @override
-  Widget build(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        Container(
-          padding: const EdgeInsets.all(22),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(28),
-            gradient: const LinearGradient(
-              colors: [Color(0xFF0EA5E9), Color(0xFF14B8A6)],
-            ),
-          ),
-          child: Column(
-            children: [
-              Stack(
-                children: [
-                  CircleAvatar(
-                    radius: 54,
-                    backgroundColor: Colors.white,
-                    child: Text(
-                      user.firstName[0],
-                      style: const TextStyle(
-                        fontSize: 44,
-                        fontWeight: FontWeight.w900,
-                        color: Color(0xFF0284C7),
-                      ),
-                    ),
-                  ),
-                  Positioned(
-                    bottom: 0,
-                    right: 0,
-                    child: CircleAvatar(
-                      backgroundColor: Colors.white,
-                      child: IconButton(
-                        icon: const Icon(Icons.camera_alt, size: 20),
-                        onPressed: () {},
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 14),
-              Text(
-                user.fullName,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 24,
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-              Text(user.role, style: const TextStyle(color: Colors.white70)),
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-        ProfileTile(
-          icon: Icons.email_outlined,
-          title: 'Email',
-          value: user.email,
-        ),
-        ProfileTile(icon: Icons.badge_outlined, title: 'Rol', value: user.role),
-        const ProfileTile(
-          icon: Icons.verified_user_outlined,
-          title: 'Status',
-          value: 'Faol foydalanuvchi',
-        ),
-      ],
-    );
-  }
-}
-
-class ProfileTile extends StatelessWidget {
-  final IconData icon;
-  final String title;
-  final String value;
-  const ProfileTile({
-    super.key,
-    required this.icon,
-    required this.title,
-    required this.value,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: ListTile(
-        leading: Icon(icon),
-        title: Text(title),
-        subtitle: Text(
-          value,
-          style: const TextStyle(fontWeight: FontWeight.w700),
-        ),
-      ),
-    );
-  }
-}
-
-class StatCard extends StatelessWidget {
-  final String title;
-  final String value;
-  final IconData icon;
-  const StatCard({
-    super.key,
-    required this.title,
-    required this.value,
-    required this.icon,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(22),
-        boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(.06), blurRadius: 14),
-        ],
-      ),
-      child: Column(
-        children: [
-          Icon(icon, color: const Color(0xFF0284C7)),
-          const SizedBox(height: 8),
-          Text(
-            value,
-            style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w900),
-          ),
-          Text(title),
-        ],
-      ),
-    );
-  }
-}
-
-class MiniBarChart extends StatelessWidget {
-  final List<int> values;
-  final List<String> labels;
-  const MiniBarChart({super.key, required this.values, required this.labels});
-
-  @override
-  Widget build(BuildContext context) {
-    final maxValue = values.reduce(max).toDouble();
-    return Container(
-      height: 240,
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(24),
-        boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(.06), blurRadius: 14),
-        ],
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: List.generate(values.length, (i) {
-          final h = (values[i] / maxValue) * 150;
-          return Expanded(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                Text(
-                  '${values[i]}',
-                  style: const TextStyle(fontWeight: FontWeight.w800),
-                ),
-                const SizedBox(height: 6),
-                AnimatedContainer(
-                  duration: const Duration(milliseconds: 500),
-                  height: h,
-                  width: 28,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(12),
-                    gradient: const LinearGradient(
-                      colors: [Color(0xFF0284C7), Color(0xFF14B8A6)],
-                      begin: Alignment.bottomCenter,
-                      end: Alignment.topCenter,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(labels[i]),
-              ],
-            ),
-          );
-        }),
-      ),
-    );
-  }
-}
-
-class SectionTitle extends StatelessWidget {
-  final String text;
-  const SectionTitle(this.text, {super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Text(
-        text,
-        style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
-      ),
-    );
-  }
-}
-
-class EmptyBox extends StatelessWidget {
-  final String text;
-  const EmptyBox({super.key, required this.text});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(22),
-      ),
-      child: Center(child: Text(text)),
-    );
-  }
-}
-
-class InfoPanel extends StatelessWidget {
-  final List<String> items;
-  const InfoPanel({super.key, required this.items});
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: items
-              .map(
-                (e) => Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: Text(e),
-                ),
-              )
-              .toList(),
-        ),
       ),
     );
   }

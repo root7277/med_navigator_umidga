@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "121370551107",
+    "project_id": "mednavigator-real-app",
+    "storage_bucket": "mednavigator-real-app.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:121370551107:android:a060e9002553ad48ee45f6",
+        "android_client_info": {
+          "package_name": "com.example.navigator"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDN5tKIZUIAAPFYPr7Mqlcd7JNe6XscKVc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
